@@ -41,6 +41,7 @@ clean_names() changes variable names with special characters, spaces, and anythi
 type_bar <- ggplot(poke_data, aes(x = type_1)) + geom_bar(color = "red") + theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1))
 type_bar
 ```
+
 There are 18 types of pokemon in the data. From the bar chart, there are few fairy and flying type pokemon.
 
 ```{r}
@@ -48,6 +49,7 @@ fpoke_data <- poke_data %>% filter((type_1 == "Bug" | type_1 == "Fire" | type_1 
                            type_1 == "Water" | type_1 == "Psychic"))
 fpoke_data$type_1 <- as.factor(fpoke_data$type_1)
 fpoke_data$legendary <- as.factor(fpoke_data$legendary)
+fpoke_data$generation <- as.factor(fpoke_data$generation)
 ```
 
 # q3
