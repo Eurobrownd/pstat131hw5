@@ -9,22 +9,133 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r message = FALSE}
+library(tidymodels)
+library(tidyverse)
+library(ggplot2)
+library(corrr)
+library(corrplot)
+library(klaR)
+library(glmnet)
+library(MASS)
+library(discrim)
+library(poissonreg)
+tidymodels_prefer()
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+poke_data <- read_csv("data/pokemon.csv")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# q1
+```{r}
+library(janitor)
+poke_data <- poke_data %>% clean_names()
+poke_data %>% head()
+```
+
+clean_names() changes variable names with special characters, spaces, and anything else that is not conventional naming. And replaces it with more conventional naming characters. clean_names() was used here and the variable sp.atk and sp.def was changed to sp_atk and sp_def
+
+# q2
+```{r}
+type_bar <- ggplot(poke_data, aes(x = type_1)) + geom_bar(color = "red") + theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1))
+type_bar
+```
+There are 18 types of pokemon in the data. From the bar chart, there are few fairy and flying type pokemon.
+
+```{r}
+fpoke_data <- poke_data %>% filter((type_1 == "Bug" | type_1 == "Fire" | type_1 == "Grass" | type_1 == "Normal" |
+                           type_1 == "Water" | type_1 == "Psychic"))
+fpoke_data$type_1 <- as.factor(fpoke_data$type_1)
+fpoke_data$legendary <- as.factor(fpoke_data$legendary)
+```
+
+# q3
+```{r}
+set.seed(115)
+poke_split <- initial_split(fpoke_data, prop = 0.8, strata = type_1)
+poke_train <- training(poke_split)
+poke_test <- testing(poke_split)
+
+poke_fold <- vfold_cv(data = poke_train, v=5, strata = type_1)
+poke_fold
+```
+
+We stratify the folds as well as the testing data in order for the models we train them on to be representative of
+the true distribution. Otherwise the folds won't be accounting for the distribution of type_1 and the model wouldn't work
+
+# q4
+```{r}
+poke_recipe <- recipe(type_1 ~ legendary + generation + sp_atk + attack + speed + defense + hp + sp_def, data= poke_train) %>% 
+  step_dummy(legendary) %>% 
+  step_dummy(generation) %>% 
+  step_normalize(all_predictors())
+```
+
+# q5
+```{r}
+poke_spec <- multinom_reg(penalty = tune(), mixture = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet")
+
+poke_wf <- workflow() %>% 
+  add_recipe(poke_recipe) %>% 
+  add_model(poke_spec)
+
+penalty_grid <- grid_regular(penalty(range = c(-5,5)),
+                             mixture(range = c(0,1)),
+                             levels = 10)
+```
+
+Since we are tuning mixture and penalty with 10 levels each, there will be 100 models in total
+
+# q6
+```{r}
+tune_res <- tune_grid(poke_wf, resamples = poke_fold, grid = penalty_grid)
+tune_res
+```
+
+```{r}
+autoplot(tune_res)
+collect_metrics(tune_res)
+```
+Both roc_auc and accuracy starts off high and drops off around the same place before 1e+00. The lasso penalty values
+seem similar in results in providing results in roc_auc and accuracy.
+
+# q7
+```{r}
+best_penalty <- select_best(tune_res, metric = "roc_auc")
+poke_final <- finalize_workflow(poke_wf, best_penalty)
+poke_final_fit <- fit(poke_final, data = poke_train)
+```
+
+```{r}
+final_acc <- augment(poke_final_fit, new_data = poke_test) %>% 
+  accuracy(truth = type_1, estimate = .pred_class)
+final_acc
+```
+
+# q8
+```{r}
+total_roc_auc <- augment(poke_final_fit, new_data = poke_test) %>% 
+  roc_auc(truth = type_1, estimate = c(.pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Psychic, .pred_Water))
+total_roc_auc
+```
+
+```{r}
+roc_curves <- augment(poke_final_fit, new_data = poke_test) %>% 
+  roc_curve(truth = type_1, estimate = c(.pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Psychic, .pred_Water)) %>% 
+  autoplot()
+roc_curves
+```
+
+```{r}
+final_model_conf <- augment(poke_final_fit, new_data = poke_test) %>% 
+  conf_mat(truth = type_1, estimate = .pred_class) %>% 
+  autoplot(type = "heatmap")
+final_model_conf
+```
+
+The model didn't perform that well with an accuracy of only around 32 percent and a roc_auc of 66 percent. The model seemed
+to be the worst at predicting grass and fire types. It was also bad at predicting bug and psychic types. It was best at predicting water and normal types. This might be due to the sheer amount of water and normal type Pokemon in our data and that
+leading to more positive truths in the confusion matrix.
